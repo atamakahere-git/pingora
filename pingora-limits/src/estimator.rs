@@ -17,6 +17,7 @@
 use crate::hash;
 use crate::RandomState;
 use std::hash::Hash;
+use std::isize;
 use std::sync::atomic::{AtomicIsize, Ordering};
 
 /// An implementation of a lock-free count–min sketch estimator. See the [wikipedia] page for more
@@ -45,13 +46,15 @@ impl Estimator {
     pub fn incr<T: Hash>(&self, key: T, value: isize) -> isize {
         self.estimator
             .iter()
-            .fold(isize::MAX, |min, (slot, hasher)| {
+            .map(|(slot, hasher)| {
                 let hash = hash(&key, hasher) as usize;
                 let counter = &slot[hash % slot.len()];
                 // Overflow is allowed for simplicity
                 let current = counter.fetch_add(value, Ordering::Relaxed);
-                std::cmp::min(min, current + value)
+                current + value
             })
+            .min()
+            .unwrap_or(isize::MAX)
     }
 
     /// Decrement `key` by the value given.
@@ -67,20 +70,23 @@ impl Estimator {
     pub fn get<T: Hash>(&self, key: T) -> isize {
         self.estimator
             .iter()
-            .fold(isize::MAX, |min, (slot, hasher)| {
+            .map(|(slot, hasher)| {
                 let hash = hash(&key, hasher) as usize;
                 let counter = &slot[hash % slot.len()];
                 let current = counter.load(Ordering::Relaxed);
-                std::cmp::min(min, current)
+                current
             })
+            .min()
+            .unwrap_or(isize::MAX)
     }
 
     /// Reset all values inside this `Estimator`.
     pub fn reset(&self) {
-        self.estimator.iter().for_each(|(slot, _)| {
-            slot.iter()
-                .for_each(|counter| counter.store(0, Ordering::Relaxed))
-        });
+        for (slot, _) in self.estimator.iter() {
+            for counter in slot.iter() {
+                counter.store(0, Ordering::Relaxed);
+            }
+        }
     }
 }
 
